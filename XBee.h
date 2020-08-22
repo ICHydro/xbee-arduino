@@ -47,6 +47,10 @@
 // This value is determined by the largest packet size (100 byte payload + 64-bit address + option byte and rssi byte) of a series 1 radio
 #define MAX_FRAME_DATA_SIZE 110
 
+// 3G change
+// Maximum frame size for an IPv4 RX packet (obsolete - now set in the a new constructor method)
+#define MAX_IP4_FRAME_DATA_SIZE 1510
+
 #define BROADCAST_ADDRESS 0xffff
 #define ZB_BROADCAST_ADDRESS 0xfffe
 
@@ -109,6 +113,9 @@
 #define ZB_IO_NODE_IDENTIFIER_RESPONSE 0x95
 #define AT_COMMAND_RESPONSE 0x88
 #define REMOTE_AT_COMMAND_RESPONSE 0x97
+ // Additional Api Id constants for 3G modem
+#define TX_IP4_REQUEST 0x20
+#define RX_IP4_RESPONSE 0xB0
 
 
 /**
@@ -151,6 +158,20 @@
 #define PACKET_EXCEEDS_BYTE_ARRAY_LENGTH 2
 #define UNEXPECTED_START_BYTE 3
 
+// 3g modem change
+// Protocols for TCP/IP
+#define XC_UDP_PROTOCOL 0
+#define XC_TCP_PROTOCOL 1
+#define XC_SSL_TCP_PROTOCOL 4
+
+// 3g modem change
+// Options to leave TCP/IP socket open after sending a message
+#define XC_LEAVE_SOCKET_OPEN 0
+#define XC_CLOSE_SOCKET_AFTER_USE 1
+
+// 3g modem change
+// the non-variable length of the frame data (not including frame id or api id or variable data size (e.g. payload, at command set value)
+#define TX_IP4_API_LENGTH 10
 /**
  * C++11 introduced the constexpr as a hint to the compiler that things
  * can be evaluated at compiletime. This can help to remove
@@ -202,7 +223,7 @@ public:
 	 * Returns the length of the frame data: all bytes after the api id, and prior to the checksum
 	 * Note up to release 0.1.2, this was incorrectly including the checksum in the length.
 	 */
-	uint8_t getFrameDataLength();
+	uint16_t getFrameDataLength();
 	void setFrameData(uint8_t* frameDataPtr);
 	/**
 	 * Returns the buffer that contains the response.
@@ -214,7 +235,7 @@ public:
 	 */
 	uint8_t* getFrameData();
 
-	void setFrameLength(uint8_t frameLength);
+	void setFrameLength(uint16_t frameLength);
 	// to support future 65535 byte packets I guess
 	/**
 	 * Returns the length of the packet
@@ -284,6 +305,11 @@ public:
 	 * Call with instance of ModemStatusResponse only if getApiId() == MODEM_STATUS_RESPONSE
 	 */
 	void getModemStatusResponse(XBeeResponse &response);
+    // 3g change
+	/**
+	* Call with instance of ipRxResponse only if getApiId() == RX_IP4_RESPONSE
+	*/
+	void getIPRxResponse(XBeeResponse &ipRxResponse);
 	/**
 	 * Returns true if the response has been successfully parsed and is complete and ready for use
 	 */
@@ -308,7 +334,7 @@ private:
 	uint8_t _msbLength;
 	uint8_t _lsbLength;
 	uint8_t _checksum;
-	uint8_t _frameLength;
+	uint16_t _frameLength;
 	bool _complete;
 	uint8_t _errorCode;
 };
@@ -386,7 +412,7 @@ public:
 	/**
 	 * Returns the length of the payload
 	 */
-	virtual uint8_t getDataLength() = 0;
+	virtual uint16_t getDataLength() = 0;
 	/**
 	 * Returns the position in the frame data where the data begins
 	 */
@@ -422,7 +448,7 @@ public:
 	XBeeAddress64& getRemoteAddress64();
 	uint16_t getRemoteAddress16();
 	uint8_t getOption();
-	uint8_t getDataLength();
+	uint16_t getDataLength();
 	// frame position where data starts
 	uint8_t getDataOffset();
 
@@ -445,7 +471,7 @@ public:
 	uint16_t getClusterId();
 	uint16_t getProfileId();
 	uint8_t getOption();
-	uint8_t getDataLength();
+	uint16_t getDataLength();
 	// frame position where data starts
 	uint8_t getDataOffset();
 
@@ -511,7 +537,7 @@ public:
 	uint8_t getOption();
 	bool isAddressBroadcast();
 	bool isPanBroadcast();
-	uint8_t getDataLength();
+	uint16_t getDataLength();
 	uint8_t getDataOffset();
 	virtual uint8_t getRssiOffset() = 0;
 };
@@ -639,7 +665,7 @@ class AtCommandResponse : public FrameIdResponse {
 		/**
 		 * Returns the length of the command value array.
 		 */
-		uint8_t getValueLength();
+		uint16_t getValueLength();
 		/**
 		 * Returns true if status equals AT_OK
 		 */
@@ -671,7 +697,7 @@ class RemoteAtCommandResponse : public AtCommandResponse {
 		/**
 		 * Returns the length of the command value array.
 		 */
-		uint8_t getValueLength();
+		uint16_t getValueLength();
 		/**
 		 * Returns the 16-bit address of the remote radio
 		 */
@@ -688,6 +714,37 @@ class RemoteAtCommandResponse : public AtCommandResponse {
 		static const uint8_t API_ID = REMOTE_AT_COMMAND_RESPONSE;
 	private:
 		XBeeAddress64 _remoteAddress64;
+};
+
+/**
+* Represents a IPv4 RX packet
+*/
+class IPRxResponse : public RxDataResponse {
+public:
+	IPRxResponse();
+
+	// initialise/overwrite fields from the response object
+	// The response object MUST contain frame data for an IPv4 RX packet
+	void init(XBeeResponse& response);
+
+	uint32_t getRemoteIPAddress();
+	uint16_t getDestinationPort();
+	uint16_t getSourcePort();
+	uint8_t getProtocol();
+	uint8_t getStatus();
+
+	uint16_t getDataLength();
+	// frame position where data starts
+	uint8_t getDataOffset();
+
+	static const uint8_t API_ID = RX_IP4_RESPONSE;
+
+private:
+	uint32_t _IPAddress;
+	uint16_t _destPort;
+	uint16_t _sourcePort;
+	uint8_t _protocol;
+	uint8_t _status;
 };
 
 
@@ -724,11 +781,11 @@ public:
 	 * The reason for this is the API ID and Frame ID are common to all requests, whereas my definition of
 	 * frame data is only the API specific data.
 	 */
-	virtual uint8_t getFrameData(uint8_t pos) = 0;
+	virtual uint8_t getFrameData(uint16_t pos) = 0;
 	/**
 	 * Returns the size of the api frame (not including frame id or api id or checksum).
 	 */
-	virtual uint8_t getFrameDataLength() = 0;
+	virtual uint16_t getFrameDataLength() = 0;
 	//void reset();
 protected:
 	void setApiId(uint8_t apiId);
@@ -761,7 +818,14 @@ private:
  */
 class XBee {
 public:
+	// 3G change - deprecated. Use XBee(uint8_t *buffer, uint16_t bufferSize) instead.
 	XBee();
+	// 3G change
+	/**
+	 * Constructor accepts response frame buffer to allow for a size other than the default.
+	 * This should be used in place of the deprecated constructor with no arguments.
+	 */
+	XBee(uint8_t *buffer, uint16_t bufferSize);
 	/**
 	 * Reads all available serial bytes until a packet is parsed, an error occurs, or the buffer is empty.
 	 * You may call <i>xbee</i>.getResponse().isAvailable() after calling this method to determine if
@@ -819,13 +883,15 @@ private:
 	XBeeResponse _response;
 	bool _escape;
 	// current packet position for response.  just a state variable for packet parsing and has no relevance for the response otherwise
-	uint8_t _pos;
+	uint16_t _pos;
 	// last byte read
 	uint8_t b;
 	uint8_t _checksumTotal;
 	uint8_t _nextFrameId;
 	// buffer for incoming RX packets.  holds only the api specific frame data, starting after the api id byte and prior to checksum
-	uint8_t _responseFrameData[MAX_FRAME_DATA_SIZE];
+	uint8_t *_responseFrameData;
+	// 3G change
+	uint16_t _responseFrameDataSize = 0;
 	Stream* _serial;
 };
 
@@ -870,6 +936,8 @@ private:
  */
 class XBeeWithCallbacks : public XBee {
 public:
+	// 3G change - constructor accepts response frame buffer to allow for a size other than the default
+	XBeeWithCallbacks(uint8_t *buffer, uint16_t bufferSize);
 
 	/**
 	 * Register a packet error callback. It is called whenever an
@@ -921,6 +989,8 @@ public:
 	void onModemStatusResponse(void (*func)(ModemStatusResponse&, uintptr_t), uintptr_t data = 0) { _onModemStatusResponse.set(func, data); }
 	void onAtCommandResponse(void (*func)(AtCommandResponse&, uintptr_t), uintptr_t data = 0) { _onAtCommandResponse.set(func, data); }
 	void onRemoteAtCommandResponse(void (*func)(RemoteAtCommandResponse&, uintptr_t), uintptr_t data = 0) { _onRemoteAtCommandResponse.set(func, data); }
+	// 3g change
+	void onIPRxResponse(void(*func)(IPRxResponse&, uintptr_t), uintptr_t data = 0) { _onIPRxResponse.set(func, data); }
 
 	/**
 	 * Regularly call this method, which ensures that the serial
@@ -1060,6 +1130,8 @@ private:
 	Callback<ModemStatusResponse&> _onModemStatusResponse;
 	Callback<AtCommandResponse&> _onAtCommandResponse;
 	Callback<RemoteAtCommandResponse&> _onRemoteAtCommandResponse;
+	// 3g change
+	Callback<IPRxResponse&> _onIPRxResponse;
 };
 
 /**
@@ -1067,7 +1139,7 @@ private:
  */
 class PayloadRequest : public XBeeRequest {
 public:
-	PayloadRequest(uint8_t apiId, uint8_t frameId, uint8_t *payload, uint8_t payloadLength);
+	PayloadRequest(uint8_t apiId, uint8_t frameId, uint8_t *payload, uint16_t payloadLength);
 	/**
 	 * Returns the payload of the packet, if not null
 	 */
@@ -1080,7 +1152,7 @@ public:
 	/*
 	 * Set the payload and its length in one call.
 	 */
-	void setPayload(uint8_t* payloadPtr, uint8_t payloadLength) {
+	void setPayload(uint8_t* payloadPtr, uint16_t payloadLength) {
 		setPayload(payloadPtr);
 		setPayloadLength(payloadLength);
 	}
@@ -1088,16 +1160,16 @@ public:
 	/**
 	 * Returns the length of the payload array, as specified by the user.
 	 */
-	uint8_t getPayloadLength();
+	uint16_t getPayloadLength();
 	/**
 	 * Sets the length of the payload to include in the request.  For example if the payload array
 	 * is 50 bytes and you only want the first 10 to be included in the packet, set the length to 10.
 	 * Length must be <= to the array length.
 	 */
-	void setPayloadLength(uint8_t payloadLength);
+	void setPayloadLength(uint16_t payloadLength);
 private:
 	uint8_t* _payloadPtr;
-	uint8_t _payloadLength;
+	uint16_t _payloadLength;
 };
 
 #ifdef SERIES_1
@@ -1112,11 +1184,11 @@ private:
  */
 class Tx16Request : public PayloadRequest {
 public:
-	Tx16Request(uint16_t addr16, uint8_t option, uint8_t *payload, uint8_t payloadLength, uint8_t frameId);
+	Tx16Request(uint16_t addr16, uint8_t option, uint8_t *payload, uint16_t payloadLength, uint8_t frameId);
 	/**
 	 * Creates a Unicast Tx16Request with the ACK option and DEFAULT_FRAME_ID
 	 */
-	Tx16Request(uint16_t addr16, uint8_t *payload, uint8_t payloadLength);
+	Tx16Request(uint16_t addr16, uint8_t *payload, uint16_t payloadLength);
 	/**
 	 * Creates a default instance of this class.  At a minimum you must specify
 	 * a payload, payload length and a destination address before sending this request.
@@ -1126,8 +1198,8 @@ public:
 	void setAddress16(uint16_t addr16);
 	uint8_t getOption();
 	void setOption(uint8_t option);
-	uint8_t getFrameData(uint8_t pos);
-	uint8_t getFrameDataLength();
+	uint8_t getFrameData(uint16_t pos);
+	uint16_t getFrameDataLength();
 protected:
 private:
 	uint16_t _addr16;
@@ -1144,11 +1216,11 @@ private:
  */
 class Tx64Request : public PayloadRequest {
 public:
-	Tx64Request(XBeeAddress64 &addr64, uint8_t option, uint8_t *payload, uint8_t payloadLength, uint8_t frameId);
+	Tx64Request(XBeeAddress64 &addr64, uint8_t option, uint8_t *payload, uint16_t payloadLength, uint8_t frameId);
 	/**
 	 * Creates a unicast Tx64Request with the ACK option and DEFAULT_FRAME_ID
 	 */
-	Tx64Request(XBeeAddress64 &addr64, uint8_t *payload, uint8_t payloadLength);
+	Tx64Request(XBeeAddress64 &addr64, uint8_t *payload, uint16_t payloadLength);
 	/**
 	 * Creates a default instance of this class.  At a minimum you must specify
 	 * a payload, payload length and a destination address before sending this request.
@@ -1159,8 +1231,8 @@ public:
 	// TODO move option to superclass
 	uint8_t getOption();
 	void setOption(uint8_t option);
-	uint8_t getFrameData(uint8_t pos);
-	uint8_t getFrameDataLength();
+	uint8_t getFrameData(uint16_t pos);
+	uint16_t getFrameDataLength();
 private:
 	XBeeAddress64 _addr64;
 	uint8_t _option;
@@ -1188,8 +1260,8 @@ public:
 	/**
 	 * Creates a unicast ZBTxRequest with the ACK option and DEFAULT_FRAME_ID
 	 */
-	ZBTxRequest(const XBeeAddress64 &addr64, uint8_t *payload, uint8_t payloadLength);
-	ZBTxRequest(const XBeeAddress64 &addr64, uint16_t addr16, uint8_t broadcastRadius, uint8_t option, uint8_t *payload, uint8_t payloadLength, uint8_t frameId);
+	ZBTxRequest(const XBeeAddress64 &addr64, uint8_t *payload, uint16_t payloadLength);
+	ZBTxRequest(const XBeeAddress64 &addr64, uint16_t addr16, uint8_t broadcastRadius, uint8_t option, uint8_t *payload, uint16_t payloadLength, uint8_t frameId);
 	/**
 	 * Creates a default instance of this class.  At a minimum you must specify
 	 * a payload, payload length and a 64-bit destination address before sending
@@ -1206,8 +1278,8 @@ public:
 	void setOption(uint8_t option);
 protected:
 	// declare virtual functions
-	uint8_t getFrameData(uint8_t pos);
-	uint8_t getFrameDataLength();
+	uint8_t getFrameData(uint16_t pos);
+	uint16_t getFrameDataLength();	
 	XBeeAddress64 _addr64;
 	uint16_t _addr16;
 	uint8_t _broadcastRadius;
@@ -1233,11 +1305,11 @@ public:
 	 * and cluster 0x0011, resulting in the same packet as sent by a
 	 * normal ZBTxRequest.
 	 */
-	ZBExplicitTxRequest(XBeeAddress64 &addr64, uint8_t *payload, uint8_t payloadLength);
+	ZBExplicitTxRequest(XBeeAddress64 &addr64, uint8_t *payload, uint16_t payloadLength);
 	/**
 	 * Create a ZBExplicitTxRequest, specifying all fields.
 	 */
-	ZBExplicitTxRequest(XBeeAddress64 &addr64, uint16_t addr16, uint8_t broadcastRadius, uint8_t option, uint8_t *payload, uint8_t payloadLength, uint8_t frameId, uint8_t srcEndpoint, uint8_t dstEndpoint, uint16_t clusterId, uint16_t profileId);
+	ZBExplicitTxRequest(XBeeAddress64 &addr64, uint16_t addr16, uint8_t broadcastRadius, uint8_t option, uint8_t *payload, uint16_t payloadLength, uint8_t frameId, uint8_t srcEndpoint, uint8_t dstEndpoint, uint16_t clusterId, uint16_t profileId);
 	/**
 	 * Creates a default instance of this class.  At a minimum you
 	 * must specify a payload, payload length and a destination
@@ -1258,8 +1330,8 @@ public:
 	void setProfileId(uint16_t profileId);
 protected:
 	// declare virtual functions
-	uint8_t getFrameData(uint8_t pos);
-	uint8_t getFrameDataLength();
+	uint8_t getFrameData(uint16_t pos);
+	uint16_t getFrameDataLength();
 private:
 	uint8_t _srcEndpoint;
 	uint8_t _dstEndpoint;
@@ -1277,15 +1349,15 @@ class AtCommandRequest : public XBeeRequest {
 public:
 	AtCommandRequest();
 	AtCommandRequest(uint8_t *command);
-	AtCommandRequest(uint8_t *command, uint8_t *commandValue, uint8_t commandValueLength);
-	uint8_t getFrameData(uint8_t pos);
-	uint8_t getFrameDataLength();
+	AtCommandRequest(uint8_t *command, uint8_t *commandValue, uint16_t commandValueLength);
+	uint8_t getFrameData(uint16_t pos);
+	uint16_t getFrameDataLength();
 	uint8_t* getCommand();
 	void setCommand(uint8_t* command);
 	uint8_t* getCommandValue();
 	void setCommandValue(uint8_t* command);
-	uint8_t getCommandValueLength();
-	void setCommandValueLength(uint8_t length);
+	uint16_t getCommandValueLength();
+	void setCommandValueLength(uint16_t length);
 	/**
 	 * Clears the optional commandValue and commandValueLength so that a query may be sent
 	 */
@@ -1294,7 +1366,7 @@ public:
 private:
 	uint8_t *_command;
 	uint8_t *_commandValue;
-	uint8_t _commandValueLength;
+	uint16_t _commandValueLength;
 };
 
 /**
@@ -1308,7 +1380,7 @@ public:
 	 * Creates a RemoteAtCommandRequest with 16-bit address to set a command.
 	 * 64-bit address defaults to broadcast and applyChanges is true.
 	 */
-	RemoteAtCommandRequest(uint16_t remoteAddress16, uint8_t *command, uint8_t *commandValue, uint8_t commandValueLength);
+	RemoteAtCommandRequest(uint16_t remoteAddress16, uint8_t *command, uint8_t *commandValue, uint16_t commandValueLength);
 	/**
 	 * Creates a RemoteAtCommandRequest with 16-bit address to query a command.
 	 * 64-bit address defaults to broadcast and applyChanges is true.
@@ -1318,7 +1390,7 @@ public:
 	 * Creates a RemoteAtCommandRequest with 64-bit address to set a command.
 	 * 16-bit address defaults to broadcast and applyChanges is true.
 	 */
-	RemoteAtCommandRequest(XBeeAddress64 &remoteAddress64, uint8_t *command, uint8_t *commandValue, uint8_t commandValueLength);
+	RemoteAtCommandRequest(XBeeAddress64 &remoteAddress64, uint8_t *command, uint8_t *commandValue, uint16_t commandValueLength);
 	/**
 	 * Creates a RemoteAtCommandRequest with 16-bit address to query a command.
 	 * 16-bit address defaults to broadcast and applyChanges is true.
@@ -1330,14 +1402,56 @@ public:
 	void setRemoteAddress64(XBeeAddress64 &remoteAddress64);
 	bool getApplyChanges();
 	void setApplyChanges(bool applyChanges);
-	uint8_t getFrameData(uint8_t pos);
-	uint8_t getFrameDataLength();
+	uint8_t getFrameData(uint16_t pos);
+	uint16_t getFrameDataLength();
 	static XBeeAddress64 broadcastAddress64;
 //	static uint16_t broadcast16Address;
 private:
 	XBeeAddress64 _remoteAddress64;
 	uint16_t _remoteAddress16;
 	bool _applyChanges;
+};
+
+// New classe for 3G change
+/**
+* Represents a TCP/IP TX packet that corresponds to Api Id: TX_IP4_REQUEST
+*
+*/
+class IPTxRequest : public PayloadRequest {
+public:
+	/**
+	* Creates a IP4 request packet with a TCP Socket, leave open option and DEFAULT_FRAME_ID
+	*/
+	IPTxRequest(uint32_t addr32, uint16_t port, uint8_t *payload, uint16_t payloadLength);
+	/**
+	* Creates a IP4 request packet.
+	*/
+	IPTxRequest(uint32_t addr32, uint16_t port, uint16_t sourcePort, uint8_t protocol, uint8_t option, uint8_t *payload, uint16_t payloadLength, uint8_t frameId);
+	/**
+	* Creates a default instance of this class with a TCP socket and leav socket open option.
+	* At a minimum you must specify a payload, payload length and a destination address and port before sending this request.
+	*/
+	IPTxRequest();
+	uint32_t getIPAddress();
+	uint16_t getPort();
+	uint16_t getSourcePort();
+	uint8_t getProtocol();
+	uint8_t getOption();
+	void setIPAddress(uint32_t addr32);
+	void setPort(uint16_t port);
+	void setSourcePort(uint16_t sourcePort);
+	void setProtocol(uint8_t protocol);
+	void setOption(uint8_t option);
+protected:
+	// declare virtual functions
+	uint8_t getFrameData(uint16_t pos);  
+	uint16_t getFrameDataLength();  
+private:
+	uint32_t _hostIP;
+	uint16_t _port;
+	uint16_t _sourcePort;
+	uint8_t _protocol;
+	uint8_t _option;
 };
 
 

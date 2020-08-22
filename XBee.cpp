@@ -63,11 +63,11 @@ void XBeeResponse::setChecksum(uint8_t checksum) {
 	_checksum = checksum;
 }
 
-uint8_t XBeeResponse::getFrameDataLength() {
+uint16_t XBeeResponse::getFrameDataLength() {
 	return _frameLength;
 }
 
-void XBeeResponse::setFrameLength(uint8_t frameLength) {
+void XBeeResponse::setFrameLength(uint16_t frameLength) {
 	_frameLength = frameLength;
 }
 
@@ -154,7 +154,7 @@ uint8_t ZBRxResponse::getDataOffset() {
 	return 11;
 }
 
-uint8_t ZBRxResponse::getDataLength() {
+uint16_t ZBRxResponse::getDataLength() {
 	return getPacketLength() - getDataOffset() - 1;
 }
 
@@ -204,7 +204,7 @@ uint8_t ZBExplicitRxResponse::getDataOffset() {
 	return 17;
 }
 
-uint8_t ZBExplicitRxResponse::getDataLength() {
+uint16_t ZBExplicitRxResponse::getDataLength() {
 	return getPacketLength() - getDataOffset() - 1;
 }
 
@@ -579,7 +579,7 @@ bool RxResponse::isPanBroadcast() {
 	return (getOption() & 4) == 4;
 }
 
-uint8_t RxResponse::getDataLength() {
+uint16_t RxResponse::getDataLength() {
 	return getPacketLength() - getDataOffset() - 1;
 }
 
@@ -618,6 +618,18 @@ void XBeeResponse::getRx64Response(XBeeResponse &rx64Response) {
 
 #endif
 
+void XBeeResponse::getIPRxResponse(XBeeResponse &ipRxResponse) {
+
+	IPRxResponse* iprx = static_cast<IPRxResponse*>(&ipRxResponse);
+
+	// pass pointer array to subclass
+	iprx->setFrameData(getFrameData());
+	setCommon(ipRxResponse);
+
+	// initialise class specific fields
+	iprx->init(ipRxResponse);
+}
+
 RemoteAtCommandResponse::RemoteAtCommandResponse() : AtCommandResponse() {
 
 }
@@ -635,7 +647,7 @@ bool RemoteAtCommandResponse::isOk() {
 	return getStatus() == AT_OK;
 }
 
-uint8_t RemoteAtCommandResponse::getValueLength() {
+uint16_t RemoteAtCommandResponse::getValueLength() {
 	return getFrameDataLength() - 14;
 }
 
@@ -721,7 +733,7 @@ uint8_t AtCommandResponse::getStatus() {
 	return getFrameData()[3];
 }
 
-uint8_t AtCommandResponse::getValueLength() {
+uint16_t AtCommandResponse::getValueLength() {
 	return getFrameDataLength() - 4;
 }
 
@@ -748,7 +760,7 @@ void XBeeResponse::getAtCommandResponse(XBeeResponse &atCommandResponse) {
 }
 
 uint16_t XBeeResponse::getPacketLength() {
-	return ((_msbLength << 8) & 0xff) + (_lsbLength & 0xff);
+	return uint16_t(_msbLength << 8) + _lsbLength;
 }
 
 uint8_t* XBeeResponse::getFrameData() {
@@ -783,11 +795,15 @@ void XBee::resetResponse() {
 	_response.reset();
 }
 
+// This constructor should not be used. It is provided for compatibility only.
 XBee::XBee(): _response(XBeeResponse()) {
         _pos = 0;
         _escape = false;
         _checksumTotal = 0;
         _nextFrameId = 0;
+		// 3g change - create an array to hold the response
+		_responseFrameData = new uint8_t[MAX_FRAME_DATA_SIZE];
+		_responseFrameDataSize = MAX_FRAME_DATA_SIZE;
 
         _response.init();
         _response.setFrameData(_responseFrameData);
@@ -796,6 +812,26 @@ XBee::XBee(): _response(XBeeResponse()) {
         _serial = &Serial1;
 #else
         _serial = &Serial;
+#endif
+}
+
+// 3G change - supply the frame buffer to the constructor
+XBee::XBee(uint8_t *buffer, uint16_t bufferSize) : _response(XBeeResponse()) {
+	_pos = 0;
+	_escape = false;
+	_checksumTotal = 0;
+	_nextFrameId = 0;
+	// 3g change - create an array to hold the response
+	_responseFrameData = buffer;
+	_responseFrameDataSize = bufferSize;
+
+	_response.init();
+	_response.setFrameData(_responseFrameData);
+	// Contributed by Paul Stoffregen for Teensy support
+#if defined(__AVR_ATmega32U4__) || defined(__MK20DX128__) || defined(__MK20DX256__)
+	_serial = &Serial1;
+#else
+	_serial = &Serial;
 #endif
 }
 
@@ -826,6 +862,10 @@ bool XBee::available() {
 
 uint8_t XBee::read() {
 	return _serial->read();
+}
+
+void XBee::flush() {
+	_serial->flush();
 }
 
 void XBee::write(uint8_t val) {
@@ -942,7 +982,7 @@ void XBee::readPacket() {
 			default:
 				// starts at fifth byte
 
-				if (_pos > MAX_FRAME_DATA_SIZE) {
+				if (_pos > _responseFrameDataSize) {
 					// exceed max size.  should never occur
 					_response.setErrorCode(PACKET_EXCEEDS_BYTE_ARRAY_LENGTH);
 					return;
@@ -969,6 +1009,8 @@ void XBee::readPacket() {
 
 					// reset state vars
 					_pos = 0;
+
+					_checksumTotal = 0;
 
 					return;
 				} else {
@@ -1016,7 +1058,7 @@ void XBeeRequest::setApiId(uint8_t apiId) {
 //}
 
 
-PayloadRequest::PayloadRequest(uint8_t apiId, uint8_t frameId, uint8_t *payload, uint8_t payloadLength) : XBeeRequest(apiId, frameId) {
+PayloadRequest::PayloadRequest(uint8_t apiId, uint8_t frameId, uint8_t *payload, uint16_t payloadLength) : XBeeRequest(apiId, frameId) {
 	_payloadPtr = payload;
 	_payloadLength = payloadLength;
 }
@@ -1029,11 +1071,11 @@ void PayloadRequest::setPayload(uint8_t* payload) {
 	_payloadPtr = payload;
 }
 
-uint8_t PayloadRequest::getPayloadLength() {
+uint16_t PayloadRequest::getPayloadLength() {
 	return _payloadLength;
 }
 
-void PayloadRequest::setPayloadLength(uint8_t payloadLength) {
+void PayloadRequest::setPayloadLength(uint16_t payloadLength) {
 	_payloadLength = payloadLength;
 }
 
@@ -1045,21 +1087,21 @@ ZBTxRequest::ZBTxRequest() : PayloadRequest(ZB_TX_REQUEST, DEFAULT_FRAME_ID, NUL
 	_option = ZB_TX_UNICAST;
 }
 
-ZBTxRequest::ZBTxRequest(const XBeeAddress64 &addr64, uint16_t addr16, uint8_t broadcastRadius, uint8_t option, uint8_t *data, uint8_t dataLength, uint8_t frameId): PayloadRequest(ZB_TX_REQUEST, frameId, data, dataLength) {
+ZBTxRequest::ZBTxRequest(const XBeeAddress64 &addr64, uint16_t addr16, uint8_t broadcastRadius, uint8_t option, uint8_t *data, uint16_t dataLength, uint8_t frameId): PayloadRequest(ZB_TX_REQUEST, frameId, data, dataLength) {
 	_addr64 = addr64;
 	_addr16 = addr16;
 	_broadcastRadius = broadcastRadius;
 	_option = option;
 }
 
-ZBTxRequest::ZBTxRequest(const XBeeAddress64 &addr64, uint8_t *data, uint8_t dataLength): PayloadRequest(ZB_TX_REQUEST, DEFAULT_FRAME_ID, data, dataLength) {
+ZBTxRequest::ZBTxRequest(const XBeeAddress64 &addr64, uint8_t *data, uint16_t dataLength): PayloadRequest(ZB_TX_REQUEST, DEFAULT_FRAME_ID, data, dataLength) {
 	_addr64 = addr64;
 	_addr16 = ZB_BROADCAST_ADDRESS;
 	_broadcastRadius = ZB_BROADCAST_RADIUS_MAX_HOPS;
 	_option = ZB_TX_UNICAST;
 }
 
-uint8_t ZBTxRequest::getFrameData(uint8_t pos) {
+uint8_t ZBTxRequest::getFrameData(uint16_t pos) {
 	if (pos == 0) {
 		return (_addr64.getMsb() >> 24) & 0xff;
 	} else if (pos == 1) {
@@ -1089,7 +1131,7 @@ uint8_t ZBTxRequest::getFrameData(uint8_t pos) {
 	}
 }
 
-uint8_t ZBTxRequest::getFrameDataLength() {
+uint16_t ZBTxRequest::getFrameDataLength() {
 	return ZB_TX_API_LENGTH + getPayloadLength();
 }
 
@@ -1135,8 +1177,8 @@ ZBExplicitTxRequest::ZBExplicitTxRequest() : ZBTxRequest() {
 	setApiId(ZB_EXPLICIT_TX_REQUEST);
 }
 
-ZBExplicitTxRequest::ZBExplicitTxRequest(XBeeAddress64 &addr64, uint16_t addr16, uint8_t broadcastRadius, uint8_t option, uint8_t *payload, uint8_t payloadLength, uint8_t frameId, uint8_t srcEndpoint, uint8_t dstEndpoint, uint16_t clusterId, uint16_t profileId)
-: ZBTxRequest(addr64, addr16, broadcastRadius, option, payload, payloadLength, frameId) {
+ZBExplicitTxRequest::ZBExplicitTxRequest(XBeeAddress64 &addr64, uint16_t addr16, uint8_t broadcastRadius, uint8_t option, uint8_t *payload, uint16_t payloadLength, uint8_t frameId, uint8_t srcEndpoint, uint8_t dstEndpoint, uint16_t clusterId, uint16_t profileId)
+	: ZBTxRequest(addr64, addr16, broadcastRadius, option, payload, payloadLength, frameId) {
 	_srcEndpoint = srcEndpoint;
 	_dstEndpoint = dstEndpoint;
 	_profileId = profileId;
@@ -1144,8 +1186,8 @@ ZBExplicitTxRequest::ZBExplicitTxRequest(XBeeAddress64 &addr64, uint16_t addr16,
 	setApiId(ZB_EXPLICIT_TX_REQUEST);
 }
 
-ZBExplicitTxRequest::ZBExplicitTxRequest(XBeeAddress64 &addr64, uint8_t *payload, uint8_t payloadLength)
-: ZBTxRequest(addr64, payload, payloadLength) {
+ZBExplicitTxRequest::ZBExplicitTxRequest(XBeeAddress64 &addr64, uint8_t *payload, uint16_t payloadLength)
+	: ZBTxRequest(addr64, payload, payloadLength) {
 	_srcEndpoint = DEFAULT_ENDPOINT;
 	_dstEndpoint = DEFAULT_ENDPOINT;
 	_profileId = DEFAULT_PROFILE_ID;
@@ -1153,7 +1195,7 @@ ZBExplicitTxRequest::ZBExplicitTxRequest(XBeeAddress64 &addr64, uint8_t *payload
 	setApiId(ZB_EXPLICIT_TX_REQUEST);
 }
 
-uint8_t ZBExplicitTxRequest::getFrameData(uint8_t pos) {
+uint8_t ZBExplicitTxRequest::getFrameData(uint16_t pos) {
 	if (pos < 10) {
 		return ZBTxRequest::getFrameData(pos);
 	} else if (pos == 10) {
@@ -1177,7 +1219,7 @@ uint8_t ZBExplicitTxRequest::getFrameData(uint8_t pos) {
 	}
 }
 
-uint8_t ZBExplicitTxRequest::getFrameDataLength() {
+uint16_t ZBExplicitTxRequest::getFrameDataLength() {
 	return ZB_EXPLICIT_TX_API_LENGTH + getPayloadLength();
 }
 
@@ -1220,17 +1262,17 @@ Tx16Request::Tx16Request() : PayloadRequest(TX_16_REQUEST, DEFAULT_FRAME_ID, NUL
 	_option = ACK_OPTION;
 }
 
-Tx16Request::Tx16Request(uint16_t addr16, uint8_t option, uint8_t *data, uint8_t dataLength, uint8_t frameId) : PayloadRequest(TX_16_REQUEST, frameId, data, dataLength) {
+Tx16Request::Tx16Request(uint16_t addr16, uint8_t option, uint8_t *data, uint16_t dataLength, uint8_t frameId) : PayloadRequest(TX_16_REQUEST, frameId, data, dataLength) {
 	_addr16 = addr16;
 	_option = option;
 }
 
-Tx16Request::Tx16Request(uint16_t addr16, uint8_t *data, uint8_t dataLength) : PayloadRequest(TX_16_REQUEST, DEFAULT_FRAME_ID, data, dataLength) {
+Tx16Request::Tx16Request(uint16_t addr16, uint8_t *data, uint16_t dataLength) : PayloadRequest(TX_16_REQUEST, DEFAULT_FRAME_ID, data, dataLength) {
 	_addr16 = addr16;
 	_option = ACK_OPTION;
 }
 
-uint8_t Tx16Request::getFrameData(uint8_t pos) {
+uint8_t Tx16Request::getFrameData(uint16_t pos) {
 
 	if (pos == 0) {
 		return (_addr16 >> 8) & 0xff;
@@ -1243,7 +1285,7 @@ uint8_t Tx16Request::getFrameData(uint8_t pos) {
 	}
 }
 
-uint8_t Tx16Request::getFrameDataLength() {
+uint16_t Tx16Request::getFrameDataLength() {
 	return TX_16_API_LENGTH + getPayloadLength();
 }
 
@@ -1267,17 +1309,17 @@ Tx64Request::Tx64Request() : PayloadRequest(TX_64_REQUEST, DEFAULT_FRAME_ID, NUL
 	_option = ACK_OPTION;
 }
 
-Tx64Request::Tx64Request(XBeeAddress64 &addr64, uint8_t option, uint8_t *data, uint8_t dataLength, uint8_t frameId) : PayloadRequest(TX_64_REQUEST, frameId, data, dataLength) {
+Tx64Request::Tx64Request(XBeeAddress64 &addr64, uint8_t option, uint8_t *data, uint16_t dataLength, uint8_t frameId) : PayloadRequest(TX_64_REQUEST, frameId, data, dataLength) {
 	_addr64 = addr64;
 	_option = option;
 }
 
-Tx64Request::Tx64Request(XBeeAddress64 &addr64, uint8_t *data, uint8_t dataLength) : PayloadRequest(TX_64_REQUEST, DEFAULT_FRAME_ID, data, dataLength) {
+Tx64Request::Tx64Request(XBeeAddress64 &addr64, uint8_t *data, uint16_t dataLength) : PayloadRequest(TX_64_REQUEST, DEFAULT_FRAME_ID, data, dataLength) {
 	_addr64 = addr64;
 	_option = ACK_OPTION;
 }
 
-uint8_t Tx64Request::getFrameData(uint8_t pos) {
+uint8_t Tx64Request::getFrameData(uint16_t pos) {
 
 	if (pos == 0) {
 		return (_addr64.getMsb() >> 24) & 0xff;
@@ -1302,7 +1344,7 @@ uint8_t Tx64Request::getFrameData(uint8_t pos) {
 	}
 }
 
-uint8_t Tx64Request::getFrameDataLength() {
+uint16_t Tx64Request::getFrameDataLength() {
 	return TX_64_API_LENGTH + getPayloadLength();
 }
 
@@ -1329,7 +1371,7 @@ AtCommandRequest::AtCommandRequest() : XBeeRequest(AT_COMMAND_REQUEST, DEFAULT_F
 	clearCommandValue();
 }
 
-AtCommandRequest::AtCommandRequest(uint8_t *command, uint8_t *commandValue, uint8_t commandValueLength) : XBeeRequest(AT_COMMAND_REQUEST, DEFAULT_FRAME_ID) {
+AtCommandRequest::AtCommandRequest(uint8_t *command, uint8_t *commandValue, uint16_t commandValueLength) : XBeeRequest(AT_COMMAND_REQUEST, DEFAULT_FRAME_ID) {
 	_command = command;
 	_commandValue = commandValue;
 	_commandValueLength = commandValueLength;
@@ -1348,7 +1390,7 @@ uint8_t* AtCommandRequest::getCommandValue() {
 	return _commandValue;
 }
 
-uint8_t AtCommandRequest::getCommandValueLength() {
+uint16_t AtCommandRequest::getCommandValueLength() {
 	return _commandValueLength;
 }
 
@@ -1360,11 +1402,11 @@ void AtCommandRequest::setCommandValue(uint8_t* value) {
 	_commandValue = value;
 }
 
-void AtCommandRequest::setCommandValueLength(uint8_t length) {
+void AtCommandRequest::setCommandValueLength(uint16_t length) {
 	_commandValueLength = length;
 }
 
-uint8_t AtCommandRequest::getFrameData(uint8_t pos) {
+uint8_t AtCommandRequest::getFrameData(uint16_t pos) {
 
 	if (pos == 0) {
 		return _command[0];
@@ -1384,7 +1426,7 @@ void AtCommandRequest::clearCommandValue() {
 //	 XBeeRequest::reset();
 //}
 
-uint8_t AtCommandRequest::getFrameDataLength() {
+uint16_t AtCommandRequest::getFrameDataLength() {
 	// command is 2 byte + length of value
 	return AT_COMMAND_API_LENGTH + _commandValueLength;
 }
@@ -1397,7 +1439,7 @@ RemoteAtCommandRequest::RemoteAtCommandRequest() : AtCommandRequest(NULL, NULL, 
 	setApiId(REMOTE_AT_REQUEST);
 }
 
-RemoteAtCommandRequest::RemoteAtCommandRequest(uint16_t remoteAddress16, uint8_t *command, uint8_t *commandValue, uint8_t commandValueLength) : AtCommandRequest(command, commandValue, commandValueLength) {
+RemoteAtCommandRequest::RemoteAtCommandRequest(uint16_t remoteAddress16, uint8_t *command, uint8_t *commandValue, uint16_t commandValueLength) : AtCommandRequest(command, commandValue, commandValueLength) {
 	_remoteAddress64 = broadcastAddress64;
 	_remoteAddress16 = remoteAddress16;
 	_applyChanges = true;
@@ -1411,7 +1453,7 @@ RemoteAtCommandRequest::RemoteAtCommandRequest(uint16_t remoteAddress16, uint8_t
 	setApiId(REMOTE_AT_REQUEST);
 }
 
-RemoteAtCommandRequest::RemoteAtCommandRequest(XBeeAddress64 &remoteAddress64, uint8_t *command, uint8_t *commandValue, uint8_t commandValueLength) : AtCommandRequest(command, commandValue, commandValueLength) {
+RemoteAtCommandRequest::RemoteAtCommandRequest(XBeeAddress64 &remoteAddress64, uint8_t *command, uint8_t *commandValue, uint16_t commandValueLength) : AtCommandRequest(command, commandValue, commandValueLength) {
 	_remoteAddress64 = remoteAddress64;
 	// don't worry.. works for series 1 too!
 	_remoteAddress16 = ZB_BROADCAST_ADDRESS;
@@ -1451,7 +1493,7 @@ void RemoteAtCommandRequest::setApplyChanges(bool applyChanges) {
 }
 
 
-uint8_t RemoteAtCommandRequest::getFrameData(uint8_t pos) {
+uint8_t RemoteAtCommandRequest::getFrameData(uint16_t pos) {
 	if (pos == 0) {
 		return (_remoteAddress64.getMsb() >> 24) & 0xff;
 	} else if (pos == 1) {
@@ -1483,7 +1525,7 @@ uint8_t RemoteAtCommandRequest::getFrameData(uint8_t pos) {
 	}
 }
 
-uint8_t RemoteAtCommandRequest::getFrameDataLength() {
+uint16_t RemoteAtCommandRequest::getFrameDataLength() {
 	return REMOTE_AT_COMMAND_API_LENGTH + getCommandValueLength();
 }
 
@@ -1537,6 +1579,10 @@ void XBee::sendByte(uint8_t b, bool escape) {
 	}
 }
 
+// 3g change. Constructor needed now
+XBeeWithCallbacks::XBeeWithCallbacks(uint8_t *buffer, uint16_t bufferSize) : XBee(buffer, bufferSize) {
+
+}
 
 void XBeeWithCallbacks::loop() {
 	if (loopTop())
@@ -1606,6 +1652,11 @@ void XBeeWithCallbacks::loopBottom() {
 		RemoteAtCommandResponse response;
 		getResponse().getRemoteAtCommandResponse(response);
 		called = _onRemoteAtCommandResponse.call(response);
+	// 3g change - callback for received IP4 packet
+	} else if (id == RX_IP4_RESPONSE) {
+		IPRxResponse response;
+		getResponse().getIPRxResponse(response);
+		called = _onIPRxResponse.call(response);
 	}
 
 	if (!called)
@@ -1615,8 +1666,8 @@ void XBeeWithCallbacks::loopBottom() {
 uint8_t XBeeWithCallbacks::matchStatus(uint8_t frameId) {
 	uint8_t id = getResponse().getApiId();
 	uint8_t *data = getResponse().getFrameData();
-	uint8_t len = getResponse().getFrameDataLength();
-	uint8_t offset = 0;
+	uint16_t len = getResponse().getFrameDataLength();
+	uint16_t offset = 0;
 
 	// Figure out if this frame has a frameId and if so, where the
 	// status byte to return is located
@@ -1759,6 +1810,14 @@ uint8_t XBeeWithCallbacks::waitForInternal(uint8_t apiId, void *response, uint16
 							return 0;
 						break;
 					}
+					case IPRxResponse::API_ID: {
+						IPRxResponse *r = (IPRxResponse*)response;
+						bool(*f)(IPRxResponse&, uintptr_t) = (bool(*)(IPRxResponse&, uintptr_t))func;
+						getResponse().getIPRxResponse(*r);
+						if (!f || f(*r, data))
+							return 0;
+						break;
+					}
 				}
 			}
 			// Call regular callbacks
@@ -1782,4 +1841,164 @@ uint8_t XBeeWithCallbacks::waitForStatus(uint8_t frameId, uint16_t timeout) {
 	} while (millis() - start < timeout);
 	return XBEE_WAIT_TIMEOUT ;
 }
+
+/*
+  Additional classes for XBee library to support XBee cellular modem
+*/
+
+// IPTxRequest methods
+IPTxRequest::IPTxRequest() : PayloadRequest(TX_IP4_REQUEST, DEFAULT_FRAME_ID, NULL, 0) {
+	_protocol = XC_TCP_PROTOCOL;
+	_option = XC_LEAVE_SOCKET_OPEN;
+}
+
+IPTxRequest::IPTxRequest(uint32_t addr32, uint16_t port, uint16_t sourcePort, uint8_t protocol, uint8_t option, uint8_t *payload, uint16_t payloadLength, uint8_t frameId) : PayloadRequest(TX_IP4_REQUEST, frameId, payload, payloadLength) {
+	_hostIP = addr32;
+	_port = port;
+	_sourcePort = sourcePort;
+	_protocol = protocol;
+	_option = option;
+}
+
+IPTxRequest::IPTxRequest(uint32_t addr32, uint16_t port, uint8_t *payload, uint16_t payloadLength) : PayloadRequest(TX_IP4_REQUEST, DEFAULT_FRAME_ID, payload, payloadLength) {
+	_hostIP = addr32;
+	_port = port;
+	_sourcePort = 0;
+	_protocol = XC_TCP_PROTOCOL;
+	_option = XC_LEAVE_SOCKET_OPEN;
+}
+
+uint8_t IPTxRequest::getFrameData(uint16_t pos) {
+	if (pos == 0) {
+		return (_hostIP >> 24) & 0xff;
+	}
+	else if (pos == 1) {
+		return (_hostIP >> 16) & 0xff;
+	}
+	else if (pos == 2) {
+		return (_hostIP >> 8) & 0xff;
+	}
+	else if (pos == 3) {
+		return _hostIP & 0xff;
+	}
+	else if (pos == 4) {
+		return (_port >> 8) & 0xff;
+	}
+	else if (pos == 5) {
+		return _port & 0xff;
+	}
+	else if (pos == 6) {
+		return (_sourcePort >> 8) & 0xff;
+	}
+	else if (pos == 7) {
+		return _sourcePort & 0xff;
+	}
+	else if (pos == 8) {
+		return _protocol;
+	}
+	else if (pos == 9) {
+		return _option;
+	}
+	else {
+		return getPayload()[pos - TX_IP4_API_LENGTH];
+	}
+}
+
+uint16_t IPTxRequest::getFrameDataLength() {
+	return TX_IP4_API_LENGTH + getPayloadLength();
+}
+
+uint32_t IPTxRequest::getIPAddress() {
+	return _hostIP;
+}
+
+uint16_t IPTxRequest::getPort() {
+	return _port;
+}
+
+uint16_t IPTxRequest::getSourcePort() {
+	return _sourcePort;
+}
+
+uint8_t IPTxRequest::getProtocol() {
+	return _protocol;
+}
+
+uint8_t IPTxRequest::getOption() {
+	return _option;
+}
+
+void IPTxRequest::setIPAddress(uint32_t addr32) {
+	_hostIP = addr32;
+}
+
+void IPTxRequest::setPort(uint16_t port) {
+	_port = port;
+}
+
+void IPTxRequest::setSourcePort(uint16_t sourcePort) {
+	_sourcePort = sourcePort;
+}
+
+void IPTxRequest::setProtocol(uint8_t protocol) {
+	_protocol = protocol;
+}
+
+void IPTxRequest::setOption(uint8_t option) {
+	_option = option;
+}
+
+
+// IPRxResponse methods
+IPRxResponse::IPRxResponse() {
+
+}
+
+void IPRxResponse::init(XBeeResponse& response) {
+	//response.setCommon(*this);
+
+	setApiId(response.getApiId());
+	setAvailable(response.isAvailable());
+	setChecksum(response.getChecksum());
+	setErrorCode(response.getErrorCode());
+	setFrameLength(response.getFrameDataLength());
+	setMsbLength(response.getMsbLength());
+	setLsbLength(response.getLsbLength());
+	setFrameData(response.getFrameData());
+
+	_IPAddress = (uint32_t(response.getFrameData()[0]) << 24) + (uint32_t(response.getFrameData()[1]) << 16)
+		+ (uint16_t(response.getFrameData()[2]) << 8) + response.getFrameData()[3];
+	_sourcePort = (uint16_t(response.getFrameData()[4]) << 8) + response.getFrameData()[5];
+	_destPort = (uint16_t(response.getFrameData()[6]) << 8) + response.getFrameData()[7];
+	_protocol = response.getFrameData()[8];
+	_status = response.getFrameData()[9];
+}
+
+uint32_t IPRxResponse::getRemoteIPAddress() {
+	return _IPAddress;
+}
+
+uint16_t IPRxResponse::getDestinationPort() {
+	return _destPort;
+}
+
+uint16_t IPRxResponse::getSourcePort() {
+	return _sourcePort;
+}
+
+uint8_t IPRxResponse::getProtocol() {
+	return _protocol;
+}
+uint8_t IPRxResponse::getStatus() {
+	return _status;
+}
+
+uint16_t IPRxResponse::getDataLength() {
+	return getPacketLength() - getDataOffset() - 1;
+}
+// markers to read data from packet array.  this is the index, so the 11th item in the array
+uint8_t IPRxResponse::getDataOffset() {
+	return 10;
+}
+
 
